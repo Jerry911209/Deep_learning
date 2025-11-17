@@ -1,0 +1,8 @@
+{
+  "class_names": [
+    "Dropout",
+    "Enrolled",
+    "Graduate"
+  ],
+  "input_dim": 34
+}
