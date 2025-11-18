@@ -266,10 +266,10 @@ def plot_confusion_matrix(y_true, y_pred, class_names, model_name, out_dir):
 def train_model(
     model_name="cnn",   # 模型種類：'cnn' / 'resnet18' / 'resnet34'
     num_epochs=100,     # 最大訓練輪數
-    batch_size=32,
+    batch_size=128,
     lr=1e-3,
     seed=42,
-    patience=30,
+    patience=20,
     exp_root="runs",    # 實驗根目錄（外層資料夾，由 main 決定）
 ):
     """
@@ -316,7 +316,8 @@ def train_model(
     print(f"\n使用模型: {model_name}")
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    #optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)
 
     history = {
         "train_loss": [],
@@ -432,7 +433,7 @@ def train_model(
 # =======================
 # 8. 三模型指標比較表（輸出成一張圖）
 # =======================
-def plot_model_comparison(all_results, out_dir):
+def plot_model_comparison(all_results, out_dir="plots"):
     """
     all_results: dict，key 是 model_name，
                  value 是 train_model 回傳的 metrics dict
@@ -475,9 +476,9 @@ if __name__ == "__main__":
     models_to_run = ["cnn", "resnet18", "resnet34"]
 
     # 共用的超參數（會反映在資料夾名稱）
-    batch_size = 32
+    batch_size = 256
     lr = 1e-3
-    patience = 30
+    patience = 20
     num_epochs = 100
     seed = 42
 
