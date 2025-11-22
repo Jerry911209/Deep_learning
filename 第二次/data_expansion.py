@@ -1,193 +1,222 @@
+# data_expansion.py
+#
+# 功能：
+# - 針對 archive (2)/data_split/train_val 底下的每個類別資料夾
+# - 每張「原始圖片」（檔名不以 aug_ 開頭）依序產生 3 張新圖：
+#     aug_00001.jpg : 旋轉 +20° + 顏色抖動
+#     aug_00002.jpg : 旋轉 -20° + 顏色抖動
+#     aug_00003.jpg : 水平翻轉 + 顏色抖動
+# - 若資料夾內已經有 aug_*.jpg，視為該類別已做過擴充，會整個略過
+#
+# 使用方式（例如在 main.py）：
+#   from data_expansion import run_expansion, need_expansion
+#   ...
+#   if need_expansion():
+#       run_expansion()
+
 import os
-import shutil
-import random
 from PIL import Image
 from torchvision import transforms
+from torchvision.transforms import functional as F
 
-# === 這裡依照你的實際路徑調整 ===
-# 原始資料根目錄（裡面直接放 4 個類別資料夾）
-SRC_ROOT = os.path.join("archive (2)", "data")
+# 你的 split 後資料根目錄
+DATA_SPLIT_ROOT = os.path.join("archive (2)", "data_split")
+TRAINVAL_ROOT   = os.path.join(DATA_SPLIT_ROOT, "train_val")
 
-# 新的「大資料夾」，用來放：原圖 + 擴充後圖片
-DST_ROOT = os.path.join("archive (2)", "data_augmented")
-
-# 目標：Gray_Leaf_Spot 在新資料夾中想要的總張數
-TARGET_NUM_GRAY = 1200   # 你可以改成你想要的數量
-
-# 認定為圖片的副檔名
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
 
-def is_image_file(filename):
+def is_image_file(filename: str) -> bool:
     return os.path.splitext(filename)[1].lower() in IMG_EXTS
 
 
-def copy_original_dataset():
-    """把 SRC_ROOT 底下的每個類別資料夾完整複製到 DST_ROOT"""
-    print("=== 複製原始資料到新資料夾 ===")
-    os.makedirs(DST_ROOT, exist_ok=True)
-
-    for class_name in sorted(os.listdir(SRC_ROOT)):
-        src_class_dir = os.path.join(SRC_ROOT, class_name)
-        if not os.path.isdir(src_class_dir):
-            continue
-
-        dst_class_dir = os.path.join(DST_ROOT, class_name)
-        os.makedirs(dst_class_dir, exist_ok=True)
-
-        count = 0
-        for fname in os.listdir(src_class_dir):
-            if not is_image_file(fname):
-                continue
-            src_path = os.path.join(src_class_dir, fname)
-            dst_path = os.path.join(dst_class_dir, fname)
-            shutil.copy2(src_path, dst_path)
-            count += 1
-
-        print(f"已複製 {class_name}: {count} 張")
+def get_class_dirs(root: str):
+    """取得 train_val 底下所有類別資料夾 (class_name, full_path) 列表"""
+    if not os.path.isdir(root):
+        return []
+    results = []
+    for name in sorted(os.listdir(root)):
+        p = os.path.join(root, name)
+        if os.path.isdir(p):
+            results.append((name, p))
+    return results
 
 
-def count_images_per_class(root):
-    """統計某個根目錄底下，各類別資料夾的圖片數量"""
-    print("\n=== 各類別圖片數量統計（root = {}） ===".format(os.path.abspath(root)))
-    total = 0
-    class_counts = {}
-
-    for class_name in sorted(os.listdir(root)):
-        class_dir = os.path.join(root, class_name)
-        if not os.path.isdir(class_dir):
-            continue
-
-        count = 0
-        for fname in os.listdir(class_dir):
-            if is_image_file(fname):
-                count += 1
-
-        class_counts[class_name] = count
-        total += count
-        print(f"{class_name}: {count}")
-
-    print(f"Total images: {total}")
-    return class_counts
-
-
-def augment_gray_leaf_spot():
+def class_already_augmented(class_dir: str) -> bool:
     """
-    在新的資料夾 DST_ROOT 裡，對 Gray_Leaf_Spot 做資料擴充，
-    直到 Gray_Leaf_Spot 的總張數達到 TARGET_NUM_GRAY。
+    判斷這個類別資料夾是不是已經做過擴充：
+    - 若裡面存在至少一張檔名以 'aug_' 開頭且為圖片檔，就視為已擴充
     """
-    class_name = "Gray_Leaf_Spot"
-    dst_class_dir = os.path.join(DST_ROOT, class_name)
+    for fname in os.listdir(class_dir):
+        if fname.startswith("aug_") and is_image_file(fname):
+            return True
+    return False
 
-    if not os.path.isdir(dst_class_dir):
-        print(f"[警告] 找不到類別資料夾: {dst_class_dir}")
+
+# 顏色抖動（隨機）
+color_jitter = transforms.ColorJitter(
+    brightness=0.2,
+    contrast=0.2,
+    saturation=0.2,
+    hue=0.05
+)
+
+# =========================
+# 三種固定的 Augmentation
+# =========================
+def apply_aug1(img: Image.Image) -> Image.Image:
+    """
+    aug_00001.jpg：旋轉 +20° + 顏色抖動
+    """
+    out = F.rotate(img, 20)      # 順時針旋轉 20 度
+    out = color_jitter(out)      # 顏色抖動
+    return out
+
+
+def apply_aug2(img: Image.Image) -> Image.Image:
+    """
+    aug_00002.jpg：旋轉 -20° + 顏色抖動
+    """
+    out = F.rotate(img, -20)     # 逆時針旋轉 20 度
+    out = color_jitter(out)      # 顏色抖動
+    return out
+
+
+def apply_aug3(img: Image.Image) -> Image.Image:
+    """
+    aug_00003.jpg：水平翻轉 + 顏色抖動
+    """
+    out = F.hflip(img)           # 水平翻轉
+    out = color_jitter(out)      # 顏色抖動
+    return out
+
+
+def next_aug_index(class_dir: str) -> int:
+    """
+    找出這個資料夾裡現有 aug_XXXXX.jpg 的最大編號，
+    回傳下一個可以使用的編號（從 1 開始）。
+    這樣就算之後再補做一點點 aug，也不會覆蓋舊檔。
+    """
+    max_idx = 0
+    for fname in os.listdir(class_dir):
+        if not fname.startswith("aug_"):
+            continue
+        if not is_image_file(fname):
+            continue
+        stem, _ = os.path.splitext(fname)   # aug_00012
+        parts = stem.split("_")
+        if len(parts) != 2:
+            continue
+        try:
+            idx = int(parts[1])
+        except ValueError:
+            continue
+        if idx > max_idx:
+            max_idx = idx
+    return max_idx + 1   # 下一個可用的 index
+
+
+def augment_fixed_3x_for_class(class_name: str, class_dir: str):
+    """
+    針對單一類別資料夾：
+    - 找出所有「原始圖片」（檔名不以 aug_ 開頭）
+    - 每張依序產生 3 張新圖 (aug1, aug2, aug3)
+    """
+    # 若已做過擴充，整個類別略過（避免越來越多）
+    if class_already_augmented(class_dir):
+        print(f"[略過] 類別 {class_name} 已有 aug_ 開頭圖片，視為已擴充。")
         return
 
-    # 取得目前 Gray_Leaf_Spot 已存在的圖片（複製過來的原圖）
-    image_files = [
-        f for f in os.listdir(dst_class_dir)
-        if is_image_file(f)
+    # 取得原始圖片列表
+    original_files = [
+        f for f in os.listdir(class_dir)
+        if is_image_file(f) and not f.startswith("aug_")
     ]
 
-    if not image_files:
-        print("[警告] Gray_Leaf_Spot 資料夾裡沒有圖片")
+    if not original_files:
+        print(f"[略過] 類別 {class_name} 沒有原始圖片。")
         return
 
-    current_num = len(image_files)
-    print(f"\nGray_Leaf_Spot 在新資料夾中的原始圖片數量: {current_num}")
+    print(f"\n=== 類別 {class_name} 擴充開始 ===")
+    print(f"路徑：{class_dir}")
+    print(f"原始張數：{len(original_files)}")
 
-    if current_num >= TARGET_NUM_GRAY:
-        print(f"目前數量 {current_num} 已經 ≥ 目標 {TARGET_NUM_GRAY}，不用擴充。")
-        return
+    # 從現有的 aug_ 編號後面開始接續
+    idx = next_aug_index(class_dir)
 
-    # 擴充使用的 transform（保持為 PIL Image，不轉 tensor）
-    augment_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomRotation(degrees=20),
-        transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2,
-            saturation=0.2,
-            hue=0.05
-        ),
-    ])
-
-    # 原圖路徑（從新資料夾讀即可）
-    image_paths = [os.path.join(dst_class_dir, f) for f in image_files]
-
-    new_added = 0
-    # 為避免檔名衝突，找一個起始 index（例如現有檔案數）
-    idx = 0
-
-    # 先確保不會覆蓋到已存在的檔名
-    existing_names = set(os.listdir(dst_class_dir))
-    while current_num < TARGET_NUM_GRAY:
-        src_path = random.choice(image_paths)
+    for fname in original_files:
+        src_path = os.path.join(class_dir, fname)
 
         try:
-            with Image.open(src_path).convert("RGB") as img:
-                aug_img = augment_transform(img)
-
-                # 產生一個新的檔名，不與現有檔案重複
-                while True:
-                    new_name = f"aug_{idx:05d}.jpg"
-                    idx += 1
-                    if new_name not in existing_names:
-                        existing_names.add(new_name)
-                        break
-
-                save_path = os.path.join(dst_class_dir, new_name)
-                aug_img.save(save_path)
-
-                new_added += 1
-                current_num += 1
-
-                if new_added % 50 == 0:
-                    print(f"已新增 {new_added} 張增強圖片，目前 Gray_Leaf_Spot 總數: {current_num}")
-
+            img = Image.open(src_path).convert("RGB")
         except Exception as e:
-            print(f"[錯誤] 處理圖片失敗 {src_path}: {e}")
+            print(f"[錯誤] 無法讀取 {src_path}：{e}")
             continue
 
-    print(f"\nGray_Leaf_Spot 資料擴充完成！")
-    print(f"總共新增 {new_added} 張，現在總數 = {current_num}（目標 {TARGET_NUM_GRAY}）")
+        # aug1
+        out1 = apply_aug1(img)
+        save1 = os.path.join(class_dir, f"aug_{idx:05d}.jpg")
+        out1.save(save1)
+        idx += 1
+
+        # aug2
+        out2 = apply_aug2(img)
+        save2 = os.path.join(class_dir, f"aug_{idx:05d}.jpg")
+        out2.save(save2)
+        idx += 1
+
+        # aug3
+        out3 = apply_aug3(img)
+        save3 = os.path.join(class_dir, f"aug_{idx:05d}.jpg")
+        out3.save(save3)
+        idx += 1
+
+    print(f"=== 類別 {class_name} 擴充完成：新增 {len(original_files) * 3} 張 ===")
+
 
 def run_expansion():
-    print("原始資料夾 SRC_ROOT：", os.path.abspath(SRC_ROOT))
-    print("新資料夾 DST_ROOT：", os.path.abspath(DST_ROOT))
+    """
+    針對 train_val 底下每個類別資料夾，
+    執行「每張原圖 -> 3 張 aug_ 圖」的擴充。
+    """
+    print("\n=== 對 train_val 做固定 3 倍擴充（每張原圖產生 3 張 aug_*） ===")
+    print("train_val 路徑：", os.path.abspath(TRAINVAL_ROOT))
 
-    # 1. 複製原始資料
-    copy_original_dataset()
+    class_dirs = get_class_dirs(TRAINVAL_ROOT)
+    if not class_dirs:
+        print("[錯誤] 找不到任何類別資料夾，請確認 split_dataset 有成功切好 train_val。")
+        return
 
-    # 2. 統計（擴充前）
-    print("\n--- 新資料夾（擴充前）統計 ---")
-    count_images_per_class(DST_ROOT)
+    for class_name, class_dir in class_dirs:
+        augment_fixed_3x_for_class(class_name, class_dir)
 
-    # 3. 擴充 Gray_Leaf_Spot
-    augment_gray_leaf_spot()
+    print("\n=== 所有類別擴充流程結束 ===")
 
-    # 4. 統計（擴充後）
-    print("\n--- 新資料夾（擴充後）統計 ---")
-    count_images_per_class(DST_ROOT)
+
+def need_expansion() -> bool:
+    """
+    只要 train_val 內任一類別已經包含 aug_ 開頭的圖片，
+    就視為已擴充過，回傳 False。
+    若完全沒有 aug_ 圖 → 回傳 True（需要擴充）
+    """
+    class_dirs = get_class_dirs(TRAINVAL_ROOT)
+
+    if not class_dirs:
+        print("[警告] 找不到 train_val 資料夾或類別資料夾，無法檢查擴充。")
+        return False
+
+    for class_name, class_dir in class_dirs:
+        for fname in os.listdir(class_dir):
+            if fname.startswith("aug_") and is_image_file(fname):
+                print(f"[偵測到] {class_name} 已含 aug_ 圖片 → 視為已擴充。")
+                return False
+
+    print("[結果] 所有類別都沒有 aug_ 開頭圖片 → 需要擴充！")
+    return True
 
 
 if __name__ == "__main__":
-    run_expansion()
-
-# if __name__ == "__main__":
-#     print("原始資料夾 SRC_ROOT：", os.path.abspath(SRC_ROOT))
-#     print("新資料夾 DST_ROOT：", os.path.abspath(DST_ROOT))
-
-#     # 1️⃣ 先複製原本資料到新的大資料夾
-#     copy_original_dataset()
-
-#     # 2️⃣ 統計新資料夾中各類別圖片數量（擴充前）
-#     print("\n--- 新資料夾（擴充前）統計 ---")
-#     count_images_per_class(DST_ROOT)
-
-#     # 3️⃣ 在新資料夾中對 Gray_Leaf_Spot 做資料擴充
-#     augment_gray_leaf_spot()
-
-#     # 4️⃣ 再統計一次（擴充後）
-#     print("\n--- 新資料夾（擴充後）統計 ---")
-#     count_images_per_class(DST_ROOT)
+    if need_expansion():
+        run_expansion()
+    else:
+        print("偵測到已擴充過，略過。")

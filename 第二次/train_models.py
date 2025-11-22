@@ -16,6 +16,7 @@
 
 import os
 from datetime import datetime
+import time
 
 import torch
 import torch.nn as nn
@@ -41,26 +42,90 @@ class SimpleCNN4Block(nn.Module):
         super(SimpleCNN4Block, self).__init__()
 
         self.features = nn.Sequential(
-            # Block 1: 3 -> 16, 256x256 -> 128x128
+            # Block 1: 3 -> 16 -> 16, 256x256 -> 128x128
             nn.Conv2d(3, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+    
+
+            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+
+            nn.MaxPool2d(2, 2),
+
+            # Block 2: 16 -> 32 -> 32, 128x128 -> 64x64
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+
+            nn.MaxPool2d(2, 2),
+
+              # Block 3: 32 -> 64, 64 -> 32
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+
+            # Block 4: 64 -> 128, 32 -> 16
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+
+            nn.MaxPool2d(2, 2),
+        )
+
+        # 最後 feature map： [32, 64, 64]
+        self.classifier = nn.Sequential(
+            nn.Linear(128 * 16 * 16, 256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.features(x)            # [B, 32, 64, 64]
+        x = x.view(x.size(0), -1)       # [B, 32*64*64]
+        x = self.classifier(x)
+        return x
+
+class SimpleCNN4Block_nomal(nn.Module):
+    def __init__(self, num_classes=4):
+        super(SimpleCNN4Block_nomal, self).__init__()
+
+        self.features = nn.Sequential(
+            # Block 1: 3 -> 16, 256x256 -> 128x128
+            nn.Conv2d(3, 16, kernel_size=5, padding=2),
             nn.BatchNorm2d(16),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
 
             # Block 2: 16 -> 32, 128x128 -> 64x64
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.Conv2d(16, 32, kernel_size=5, padding=2),
             nn.BatchNorm2d(32),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
 
             # Block 3: 32 -> 64, 64x64 -> 32x32
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.Conv2d(32, 64, kernel_size=5, padding=2),
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
 
             # Block 4: 64 -> 128, 32x32 -> 16x16
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.Conv2d(64, 128, kernel_size=5, padding=2),
             nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(2, 2),
@@ -79,8 +144,6 @@ class SimpleCNN4Block(nn.Module):
         x = x.view(x.size(0), -1)     # [B, 128*16*16]
         x = self.classifier(x)        # [B, num_classes]
         return x
-
-
 # =======================
 # 2. 模型工廠：依名字建立模型
 # =======================
@@ -89,6 +152,9 @@ def get_model(model_name="cnn", num_classes=4):
 
     if model_name == "cnn":
         model = SimpleCNN4Block(num_classes=num_classes)
+
+    elif model_name == "cnn_nomal":
+        model = SimpleCNN4Block_nomal(num_classes=num_classes)
 
     elif model_name == "resnet18":
         model = models.resnet18(pretrained=True)
@@ -110,54 +176,91 @@ def get_model(model_name="cnn", num_classes=4):
 # 3. 訓練 / 驗證一個 epoch
 # =======================
 def train_one_epoch(model, loader, criterion, optimizer, device):
+    # 將模型切換到「訓練模式」
+    # 會啟動 Dropout、BatchNorm 的 running mean/var 更新
     model.train()
-    running_loss = 0.0
-    correct = 0
-    total = 0
 
+    running_loss = 0.0   # 用來累積整個 epoch 的 loss
+    correct = 0          # 正確預測的數量
+    total = 0            # 樣本數總計
+
+    # 從 DataLoader 逐批讀取資料
     for images, labels in loader:
+        # 將影像與標籤移到 GPU 或 CPU
         images = images.to(device)
         labels = labels.to(device)
 
+        # 梯度清零（避免前一批資料的梯度累積）
         optimizer.zero_grad()
 
+        # 前向傳遞，得到模型輸出 logits
         outputs = model(images)
+
+        # 計算 loss（如 CrossEntropyLoss）
         loss = criterion(outputs, labels)
+
+        # 反向傳遞，計算每個參數的梯度
         loss.backward()
+
+        # 使用 optimizer 更新模型的參數
         optimizer.step()
 
+        # 累積 loss（loss.item() 是單一 batch 平均 loss，所以乘 batch size）
         running_loss += loss.item() * images.size(0)
+
+        # 取最大 logit 的 index 作為預測類別
         _, preds = torch.max(outputs, 1)
+
+        # 計算這批有多少預測正確
         correct += (preds == labels).sum().item()
+
+        # 累加 batch size（此次有多少資料）
         total += labels.size(0)
 
+    # 計算整個 epoch 的平均 loss 與 accuracy
     epoch_loss = running_loss / total
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
 
 def eval_one_epoch(model, loader, criterion, device):
+    # 切換到「驗證模式」
+    # 會關閉 Dropout、BatchNorm 不再更新 running stats
     model.eval()
+
     running_loss = 0.0
     correct = 0
     total = 0
 
+    # 驗證不需要計算梯度 → 減少記憶體與加速
     with torch.no_grad():
         for images, labels in loader:
             images = images.to(device)
             labels = labels.to(device)
 
+            # 前向傳遞（沒有 backward）
             outputs = model(images)
+
+            # 計算 loss
             loss = criterion(outputs, labels)
 
+            # 累積 loss（乘 batch size 是為了計整個 epoch 的平均 loss）
             running_loss += loss.item() * images.size(0)
+
+            # 計算預測類別
             _, preds = torch.max(outputs, 1)
+
+            # 累計正確數
             correct += (preds == labels).sum().item()
+
+            # 累加總數
             total += labels.size(0)
 
+    # 計算整個 epoch 的平均 loss 與 accuracy
     epoch_loss = running_loss / total
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
+
 
 
 # =======================
@@ -168,8 +271,16 @@ def get_test_predictions(model, test_loader, device):
     y_true = []
     y_pred = []
 
-    full_dataset = test_loader.dataset.dataset  # Subset 裡的原始 ImageFolder
-    idx_to_class = {v: k for k, v in full_dataset.class_to_idx.items()}
+    # 兼容兩種情況：
+    # 1) test_loader.dataset 是 Subset(ImageFolder)
+    # 2) test_loader.dataset 直接是 ImageFolder
+    ds = test_loader.dataset
+    if hasattr(ds, "dataset") and hasattr(ds.dataset, "class_to_idx"):
+        base_dataset = ds.dataset          # Subset 裡包的 ImageFolder
+    else:
+        base_dataset = ds                  # 直接就是 ImageFolder
+
+    idx_to_class = {v: k for k, v in base_dataset.class_to_idx.items()}
     class_names = [idx_to_class[i] for i in range(len(idx_to_class))]
 
     with torch.no_grad():
@@ -184,6 +295,7 @@ def get_test_predictions(model, test_loader, device):
             y_pred.extend(preds.cpu().tolist())
 
     return y_true, y_pred, class_names
+
 
 
 # =======================
@@ -266,12 +378,15 @@ def plot_confusion_matrix(y_true, y_pred, class_names, model_name, out_dir):
 def train_model(
     model_name="cnn",   # 模型種類：'cnn' / 'resnet18' / 'resnet34'
     num_epochs=100,     # 最大訓練輪數
-    batch_size=32,
-    lr=1e-3,
+    batch_size=64,
+    lr=3e-4,
     seed=42,
     patience=30,
     exp_root="runs",    # 實驗根目錄（外層資料夾，由 main 決定）
+    
+
 ):
+    start_time = time.time()
     """
     exp_root: 一次實驗的根目錄，例如:
       runs/20251117_223045_bs32_lr0.001_pat30
@@ -280,6 +395,7 @@ def train_model(
 
     # 對每個模型建立自己的資料夾，例如：
     # runs/時間_bsxx_lrxx_patxx/cnn/
+
     model_dir = os.path.join(exp_root, model_name)
     plots_dir = os.path.join(model_dir, "plots")
     os.makedirs(model_dir, exist_ok=True)
@@ -316,8 +432,9 @@ def train_model(
     print(f"\n使用模型: {model_name}")
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
+    #optimizer = optim.Adam(model.parameters(), lr=lr,weight_decay=1e-4)
+    #optimizer = torch.optim.RAdam(model.parameters(), lr=3e-4, weight_decay=1e-4)
     history = {
         "train_loss": [],
         "val_loss": [],
@@ -331,6 +448,7 @@ def train_model(
     no_improve_count = 0
 
     print(f"\n啟用 Early Stopping：以驗證損失為準，patience = {patience}\n")
+    print("目前環境","BS=",batch_size,"IR=",lr,"\n")
 
     # 4️⃣ 訓練迴圈
     for epoch in range(num_epochs):
@@ -354,20 +472,23 @@ def train_model(
 
         # Early Stopping 判斷
         if val_loss < best_val_loss:
+            # 優化成功 → 更新最佳模型紀錄
             best_val_loss = val_loss
-            best_state_dict = model.state_dict()
+            best_state_dict = model.state_dict()# 存模型權重
             best_epoch = epoch + 1      # epoch 從 0 開始，所以 +1
-            no_improve_count = 0
+            no_improve_count = 0 #重置
             print(f"  ➜ 驗證損失下降，新 best_val_loss = {best_val_loss:.4f}（epoch {best_epoch}）")
         else:
+            # 沒進步 → 次數累加
             no_improve_count += 1
             print(f"  ➜ 驗證損失無進步（連續 {no_improve_count} 次）")
-
+            
+            # 若無提升次數達 patience → 觸發 Early Stopping
             if no_improve_count >= patience:
                 print(f"\n⚠ 觸發 Early Stopping：驗證損失已連續 {patience} 個 epoch 無進步，停止訓練。\n")
-                break
+                break # 結束訓練迴圈
 
-    # 實際停止的 epoch（可能 < num_epochs）
+# 訓練結束後的實際 epoch 數（可能因 Early Stopping 少於 num_epochs）
     stop_epoch = len(history["train_loss"])
 
     # 5️⃣ 載入最佳權重
@@ -425,6 +546,12 @@ def train_model(
         "recall_weighted": recall_weighted,
         "f1_weighted": f1_weighted,
     }
+    end_time = time.time()
+    total_sec = end_time - start_time
+    total_min = total_sec / 60
+
+    print(f"\n📌 {model_name} 訓練時間：")
+    print(f"   → {total_sec:.2f} 秒 ({total_min:.2f} 分鐘)")
 
     return metrics, history
 
@@ -432,7 +559,7 @@ def train_model(
 # =======================
 # 8. 三模型指標比較表（輸出成一張圖）
 # =======================
-def plot_model_comparison(all_results, out_dir):
+def plot_model_comparison(all_results, out_dir="plots"):
     """
     all_results: dict，key 是 model_name，
                  value 是 train_model 回傳的 metrics dict
@@ -475,8 +602,8 @@ if __name__ == "__main__":
     models_to_run = ["cnn", "resnet18", "resnet34"]
 
     # 共用的超參數（會反映在資料夾名稱）
-    batch_size = 32
-    lr = 1e-3
+    batch_size = 64
+    lr = 3e-4
     patience = 30
     num_epochs = 100
     seed = 42
