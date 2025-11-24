@@ -53,8 +53,8 @@ def main():
     models_to_run = ["cnn","cnn_nomal"]
 
     #超參數定義
-    num_epochs=300# 最大 epoch（Early Stopping 會提前停）
-    batch_size=32
+    num_epochs=400# 最大 epoch（Early Stopping 會提前停）
+    batch_size=64
     lr=3e-4
     seed=42
     patience=30
